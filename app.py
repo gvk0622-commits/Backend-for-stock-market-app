@@ -6,6 +6,113 @@ import torch.nn as nn
 import numpy as np
 import random
 import yfinance as yf
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+import os
+
+app = Flask(__name__)
+
+# ==========================================
+# 1. DATABASE & SECURITY CONFIGURATION
+# ==========================================
+# This reads the database URL from Render. If testing locally, it uses a local file.
+db_url = os.environ.get('DATABASE_URL', 'sqlite:///kasu_wealth.db')
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1) # SQLAlchemy requires 'postgresql://'
+
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET', 'super-secret-kasu-key-change-this-later')
+
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+
+# ==========================================
+# 2. DATABASE TABLES (MODELS)
+# ==========================================
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    # This links the user to their purchases
+    purchases = db.relationship('Purchase', backref='owner', lazy=True)
+
+class Purchase(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    asset_name = db.Column(db.String(100), nullable=False)  # e.g., "Reliance", "Gold"
+    buy_price = db.Column(db.Float, nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
+    date = db.Column(db.String(50), nullable=False)
+
+# Initialize the database tables
+with app.app_context():
+    db.create_all()
+
+# ==========================================
+# 3. AUTHENTICATION ROUTES
+# ==========================================
+
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    # Check if user already exists
+    if User.query.filter_by(email=email).first():
+        return jsonify({"success": False, "message": "Email is already registered"}), 400
+
+    # Scramble the password so hackers can't read it
+    hashed_pw = generate_password_hash(password)
+    
+    new_user = User(name=name, email=email, password_hash=hashed_pw)
+    db.session.add(new_user)
+    db.session.commit()
+
+    return jsonify({"success": True, "message": "Account created successfully!"}), 201
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    user = User.query.filter_by(email=email).first()
+    
+    # Check if user exists AND password matches the scrambled hash
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify({"success": False, "message": "Invalid email or password"}), 401
+
+    # Create the secure digital key (JWT)
+    access_token = create_access_token(identity=str(user.id))
+    
+    return jsonify({
+        "success": True, 
+        "token": access_token, 
+        "name": user.name
+    }), 200
+
+# Example of a PROTECTED route (requires the JWT token to access)
+@app.route('/api/my_portfolio', methods=['GET'])
+@jwt_required()
+def my_portfolio():
+    # Find out who is making the request using their token
+    current_user_id = get_jwt_identity()
+    user = User.query.get(current_user_id)
+    
+    # Fetch all purchases for this specific user
+    user_purchases = Purchase.query.filter_by(user_id=user.id).all()
+    
+    portfolio_data = [{"asset": p.asset_name, "price": p.buy_price, "qty": p.quantity} for p in user_purchases]
+    
+    return jsonify({"success": True, "owner": user.name, "portfolio": portfolio_data}), 200
+
+# ... (Keep all your existing AI routes down here) ...
 
 app = Flask(__name__)
 
@@ -173,3 +280,4 @@ def live_market():
             },
             "etfs": {"NIFTYBEES": "₹245.50", "GOLDBEES": "₹54.20"}
         })
+
