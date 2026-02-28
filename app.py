@@ -9,6 +9,11 @@ import yfinance as yf  # <-- Moved to the top for best practices!
 
 app = Flask(__name__)
 
+# --- NEW: HEALTH CHECK ROUTE FOR RENDER ---
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({"status": "Kasu Wealth AI Backend is Live & Healthy!"}), 200
+
 # ==========================================
 # 1. LOAD DECISION TREE (Crash Detection)
 # ==========================================
@@ -196,3 +201,4 @@ if __name__ == '__main__':
     print("="*50 + "\n")
 
     app.run(debug=True, host='0.0.0.0', port=5000)
+
