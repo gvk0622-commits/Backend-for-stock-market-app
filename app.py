@@ -1,4 +1,9 @@
-from flask import Flask, jsonify
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy import text
+import os
 import joblib
 import pandas as pd
 import torch
@@ -6,21 +11,16 @@ import torch.nn as nn
 import numpy as np
 import random
 import yfinance as yf
-from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from werkzeug.security import generate_password_hash, check_password_hash
-import os
 
+# ==========================================
+# 1. APP & DATABASE CONFIGURATION
+# ==========================================
 app = Flask(__name__)
 
-# ==========================================
-# 1. DATABASE & SECURITY CONFIGURATION
-# ==========================================
-# This reads the database URL from Render. If testing locally, it uses a local file.
+# Reads the database URL from Render. Defaults to local SQLite if not on Render.
 db_url = os.environ.get('DATABASE_URL', 'sqlite:///kasu_wealth.db')
 if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1) # SQLAlchemy requires 'postgresql://'
+    db_url = db_url.replace("postgres://", "postgresql://", 1) # SQLAlchemy fix
 
 app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -48,14 +48,28 @@ class Purchase(db.Model):
     quantity = db.Column(db.Float, nullable=False)
     date = db.Column(db.String(50), nullable=False)
 
-# Initialize the database tables
+# Initialize the database tables when the app starts
 with app.app_context():
     db.create_all()
 
 # ==========================================
-# 3. AUTHENTICATION ROUTES
+# 3. HEALTH CHECK ROUTES
 # ==========================================
+@app.route('/', methods=['GET'])
+def home():
+    return jsonify({"status": "Kasu Wealth AI Backend is Live & Healthy!"}), 200
 
+@app.route('/api/test_db', methods=['GET'])
+def test_db():
+    try:
+        db.session.execute(text('SELECT 1'))
+        return jsonify({"success": True, "message": "PostgreSQL Database is perfectly connected! 🚀"}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Database connection failed: {str(e)}"}), 500
+
+# ==========================================
+# 4. AUTHENTICATION ROUTES (LOGIN / REGISTER)
+# ==========================================
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
@@ -63,13 +77,10 @@ def register():
     email = data.get('email')
     password = data.get('password')
 
-    # Check if user already exists
     if User.query.filter_by(email=email).first():
         return jsonify({"success": False, "message": "Email is already registered"}), 400
 
-    # Scramble the password so hackers can't read it
     hashed_pw = generate_password_hash(password)
-    
     new_user = User(name=name, email=email, password_hash=hashed_pw)
     db.session.add(new_user)
     db.session.commit()
@@ -84,11 +95,9 @@ def login():
 
     user = User.query.filter_by(email=email).first()
     
-    # Check if user exists AND password matches the scrambled hash
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"success": False, "message": "Invalid email or password"}), 401
 
-    # Create the secure digital key (JWT)
     access_token = create_access_token(identity=str(user.id))
     
     return jsonify({
@@ -97,32 +106,18 @@ def login():
         "name": user.name
     }), 200
 
-# Example of a PROTECTED route (requires the JWT token to access)
 @app.route('/api/my_portfolio', methods=['GET'])
 @jwt_required()
 def my_portfolio():
-    # Find out who is making the request using their token
     current_user_id = get_jwt_identity()
     user = User.query.get(current_user_id)
-    
-    # Fetch all purchases for this specific user
     user_purchases = Purchase.query.filter_by(user_id=user.id).all()
     
     portfolio_data = [{"asset": p.asset_name, "price": p.buy_price, "qty": p.quantity} for p in user_purchases]
-    
     return jsonify({"success": True, "owner": user.name, "portfolio": portfolio_data}), 200
 
-# ... (Keep all your existing AI routes down here) ...
-
-app = Flask(__name__)
-
-# --- HEALTH CHECK (Answers Render instantly!) ---
-@app.route('/', methods=['GET'])
-def home():
-    return jsonify({"status": "Kasu Wealth AI Backend is Live & Healthy!"}), 200
-
 # ==========================================
-# 1. AI MODELS & LAZY LOADING
+# 5. AI MODELS & LAZY LOADING
 # ==========================================
 class QNetwork(nn.Module):
     def __init__(self):
@@ -136,12 +131,10 @@ class QNetwork(nn.Module):
         x = torch.relu(self.fc2(x))
         return self.fc3(x)
 
-# Global variables to hold models
 model = None
 q_network = None
 
 def load_models():
-    """Loads models ONLY when requested, preventing server boot crashes!"""
     global model, q_network
     if model is None:
         try:
@@ -160,7 +153,7 @@ def load_models():
             print(f"❌ Q-Network Error: {e}")
 
 # ==========================================
-# 2. ASSET DATA
+# 6. ASSET DATA FOR PORTFOLIO
 # ==========================================
 funds = {
     "119383": "HDFC Top 100 Fund",
@@ -174,14 +167,12 @@ SILVER_ETFS = ["Nippon India Silver ETF", "ICICI Prudential Silver ETF", "HDFC S
 RE_ETFS = ["ICICI Prudential Nifty Next 50", "Kotak Nifty Next 50", "HDFC Nifty Next 50"]
 
 # ==========================================
-# 3. PORTFOLIO ANALYZER ENDPOINT
+# 7. AI PORTFOLIO ANALYZER ENDPOINT
 # ==========================================
 @app.route('/analyze_portfolio', methods=['GET'])
 def analyze_portfolio():
-    # ⚡ ONLY LOAD MODELS WHEN SOMEONE ASKS FOR AN ANALYSIS
     load_models()
     
-    # If models failed to load, return safe fallback data so app doesn't crash
     if model is None or q_network is None:
          return jsonify({"success": True, "results": [{"fund_name": name, "fund_id": code, "status": "Continue"} for code, name in funds.items()]})
 
@@ -240,7 +231,7 @@ def analyze_portfolio():
     return jsonify({"success": True, "results": final_output})
 
 # ==========================================
-# 4. LIVE REAL-WORLD MARKET DATA 
+# 8. LIVE REAL-WORLD MARKET DATA 
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
@@ -269,7 +260,7 @@ def live_market():
             "etfs": {"NIFTYBEES": f"₹{nifty_price}", "GOLDBEES": f"₹{gold_etf_price}"}
         })
     except Exception as e:
-        # BULLETPROOF FALLBACK
+        # BULLETPROOF FALLBACK IF YAHOO FINANCE FAILS
         fallback_gold = [13500.0, 13550.0, 13480.0, 13600.0, 13620.0, 13650.0, 13668.46]
         fallback_silver = [230.0, 232.0, 231.5, 235.0, 234.0, 236.0, 237.34]
         return jsonify({
@@ -280,4 +271,3 @@ def live_market():
             },
             "etfs": {"NIFTYBEES": "₹245.50", "GOLDBEES": "₹54.20"}
         })
-
