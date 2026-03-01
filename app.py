@@ -115,6 +115,37 @@ def my_portfolio():
     
     portfolio_data = [{"asset": p.asset_name, "price": p.buy_price, "qty": p.quantity} for p in user_purchases]
     return jsonify({"success": True, "owner": user.name, "portfolio": portfolio_data}), 200
+@app.route('/api/buy_asset', methods=['POST'])
+@jwt_required()
+def buy_asset():
+    try:
+        # Find out exactly who is making the purchase using their secure JWT token
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        
+        # Grab the purchase details from the Flutter app
+        data = request.get_json()
+        asset_name = data.get('asset_name')
+        buy_price = data.get('buy_price')
+        quantity = data.get('quantity')
+        date = data.get('date')
+
+        # Add the purchase to the database, explicitly linked to this user
+        new_purchase = Purchase(
+            user_id=user.id,
+            asset_name=asset_name,
+            buy_price=buy_price,
+            quantity=quantity,
+            date=date
+        )
+        
+        db.session.add(new_purchase)
+        db.session.commit()
+
+        return jsonify({"success": True, "message": f"Successfully purchased {quantity} units of {asset_name}!"}), 201
+
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Transaction failed: {str(e)}"}), 500
 
 # ==========================================
 # 5. AI MODELS & LAZY LOADING
@@ -271,3 +302,4 @@ def live_market():
             },
             "etfs": {"NIFTYBEES": "₹245.50", "GOLDBEES": "₹54.20"}
         })
+
