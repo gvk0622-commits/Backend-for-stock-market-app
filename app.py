@@ -47,6 +47,10 @@ class Purchase(db.Model):
     buy_price = db.Column(db.Float, nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     date = db.Column(db.String(50), nullable=False)
+class Wallet(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True, nullable=False)
+    balance = db.Column(db.Float, default=0.0)
 
 # Initialize the database tables when the app starts
 with app.app_context():
@@ -115,6 +119,41 @@ def my_portfolio():
     
     portfolio_data = [{"asset": p.asset_name, "price": p.buy_price, "qty": p.quantity} for p in user_purchases]
     return jsonify({"success": True, "owner": user.name, "portfolio": portfolio_data}), 200
+@app.route('/api/wallet', methods=['GET', 'POST'])
+@jwt_required()
+def manage_wallet():
+    current_user_id = get_jwt_identity()
+    
+    # Auto-create a wallet for the user if they don't have one yet!
+    wallet = Wallet.query.filter_by(user_id=current_user_id).first()
+    if not wallet:
+        wallet = Wallet(user_id=current_user_id, balance=0.0)
+        db.session.add(wallet)
+        db.session.commit()
+
+    # GET REQUEST: Flutter is just asking "How much money is in the wallet?"
+    if request.method == 'GET':
+        return jsonify({"success": True, "balance": wallet.balance}), 200
+        
+    # POST REQUEST: Flutter is saying "Add money to the wallet!"
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            amount = float(data.get('amount', 0.0))
+            
+            if amount <= 0:
+                return jsonify({"success": False, "message": "Amount must be greater than zero."}), 400
+                
+            wallet.balance += amount
+            db.session.commit()
+            
+            return jsonify({
+                "success": True, 
+                "balance": wallet.balance, 
+                "message": f"Successfully added ₹{amount:,.2f} to wallet!"
+            }), 200
+        except Exception as e:
+            return jsonify({"success": False, "message": str(e)}), 500
 @app.route('/api/buy_asset', methods=['POST'])
 @jwt_required()
 def buy_asset():
@@ -302,4 +341,5 @@ def live_market():
             },
             "etfs": {"NIFTYBEES": "₹245.50", "GOLDBEES": "₹54.20"}
         })
+
 
