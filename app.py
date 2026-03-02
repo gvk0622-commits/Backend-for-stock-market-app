@@ -158,18 +158,34 @@ def manage_wallet():
 @jwt_required()
 def buy_asset():
     try:
-        # Find out exactly who is making the purchase using their secure JWT token
         current_user_id = get_jwt_identity()
         user = User.query.get(current_user_id)
         
-        # Grab the purchase details from the Flutter app
+        # Grab the user's wallet
+        wallet = Wallet.query.filter_by(user_id=user.id).first()
+        
+        # Grab the purchase details from Flutter
         data = request.get_json()
         asset_name = data.get('asset_name')
-        buy_price = data.get('buy_price')
-        quantity = data.get('quantity')
+        buy_price = float(data.get('buy_price'))
+        quantity = float(data.get('quantity'))
         date = data.get('date')
 
-        # Add the purchase to the database, explicitly linked to this user
+        # 🚀 THE MATH: Calculate total cost
+        total_cost = buy_price * quantity
+
+        # 🚀 THE VAULT CHECK: Do they have enough money?
+        if not wallet or wallet.balance < total_cost:
+            current_bal = wallet.balance if wallet else 0.0
+            return jsonify({
+                "success": False, 
+                "message": f"Insufficient funds! Cost is ₹{total_cost:,.2f}, but your balance is only ₹{current_bal:,.2f}."
+            }), 400
+
+        # 🚀 DEDUCT THE MONEY
+        wallet.balance -= total_cost
+
+        # 🚀 SAVE THE PURCHASE
         new_purchase = Purchase(
             user_id=user.id,
             asset_name=asset_name,
@@ -341,5 +357,6 @@ def live_market():
             },
             "etfs": {"NIFTYBEES": "₹245.50", "GOLDBEES": "₹54.20"}
         })
+
 
 
