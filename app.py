@@ -52,6 +52,14 @@ class Purchase(db.Model):
 # ==========================================
 # 🚀 3. AUTHENTICATION (LOGIN & REGISTER)
 # ==========================================
+# ==========================================
+# 🧨 TEMPORARY DEV ROUTE: RESET DATABASE
+# ==========================================
+@app.route('/api/reset_db')
+def reset_db():
+    db.drop_all()   # Destroys the old, outdated tables
+    db.create_all() # Builds the new, perfect tables with full_name, Wallets, etc.
+    return "Database successfully reset and synced with new architecture!"
 @app.route('/api/register', methods=['POST'])
 def register():
     try:
@@ -284,3 +292,4 @@ if __name__ == '__main__':
     # Run the server
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
