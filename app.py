@@ -379,35 +379,45 @@ def live_equities():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 9. LIVE MARKET NEWS (NEW)
+# 🚀 9. LIVE MARKET NEWS (WITH IMAGES)
 # ==========================================
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
     try:
-        # Scrape top headlines from Moneycontrol (or similar)
         url = "https://www.moneycontrol.com/news/business/markets/"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=5)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         news_items = []
-        # Find article blocks (Moneycontrol structure changes, this is a basic example)
+        # Find article blocks
         articles = soup.find_all('li', class_='clearfix', limit=5) 
         
         for article in articles:
             a_tag = article.find('a')
+            img_tag = article.find('img') # 🚀 Extract the image tag
+            
             if a_tag and a_tag.get('title'):
+                # Extract the image URL, provide a fallback if missing
+                image_url = ""
+                if img_tag and img_tag.get('data-src'):
+                    image_url = img_tag.get('data-src')
+                elif img_tag and img_tag.get('src'):
+                    image_url = img_tag.get('src')
+                else:
+                    # Provide a generic stock market image fallback
+                    image_url = "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"
+
                 news_items.append({
                     "title": a_tag.get('title'),
                     "url": a_tag.get('href'),
-                    "source": "Moneycontrol"
+                    "source": "Moneycontrol",
+                    "image": image_url # 🚀 Add the image to the response
                 })
                 
-        # Fallback if scraping fails
         if not news_items:
              news_items = [
-                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly"},
-                {"title": "RBI holds rates steady, focuses on inflation", "url": "#", "source": "Economics Daily"}
+                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly", "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"},
              ]
 
         return jsonify({"success": True, "news": news_items}), 200
@@ -416,7 +426,7 @@ def market_news():
          return jsonify({
              "success": False, 
              "news": [
-                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly"}
+                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly", "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"}
              ]
          }), 200
 
@@ -430,3 +440,4 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
