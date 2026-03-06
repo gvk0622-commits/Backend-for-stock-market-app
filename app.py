@@ -5,6 +5,10 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from flask_cors import CORS
 import os
 import random
+import yfinance as yf
+from mftool import Mftool
+import requests
+from bs4 import BeautifulSoup
 from datetime import timedelta
 
 app = Flask(__name__)
@@ -26,6 +30,9 @@ app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
+
+# Initialize Mftool for Indian Mutual Funds
+mf = Mftool()
 
 # ==========================================
 # 🚀 2. DATABASE MODELS (THE TABLES)
@@ -52,14 +59,12 @@ class Purchase(db.Model):
 # ==========================================
 # 🚀 3. AUTHENTICATION (LOGIN & REGISTER)
 # ==========================================
-# ==========================================
-# 🧨 TEMPORARY DEV ROUTE: RESET DATABASE
-# ==========================================
 @app.route('/api/reset_db')
 def reset_db():
-    db.drop_all()   # Destroys the old, outdated tables
-    db.create_all() # Builds the new, perfect tables with full_name, Wallets, etc.
+    db.drop_all()   
+    db.create_all() 
     return "Database successfully reset and synced with new architecture!"
+
 @app.route('/api/register', methods=['POST'])
 def register():
     try:
@@ -109,7 +114,6 @@ def manage_wallet():
     current_user_id = get_jwt_identity()
     wallet = Wallet.query.filter_by(user_id=current_user_id).first()
     
-    # Failsafe: Create wallet if it somehow doesn't exist
     if not wallet:
         wallet = Wallet(user_id=current_user_id, balance=0.0)
         db.session.add(wallet)
@@ -143,7 +147,6 @@ def buy_asset():
         quantity = float(data.get('quantity'))
         total_cost = buy_price * quantity
 
-        # Wallet Guardrail
         if not wallet or wallet.balance < total_cost:
             bal = wallet.balance if wallet else 0.0
             return jsonify({"success": False, "message": f"Insufficient funds! Cost: ₹{total_cost:,.2f}, Balance: ₹{bal:,.2f}."}), 400
@@ -216,7 +219,6 @@ def my_portfolio():
 @jwt_required()
 def get_history():
     try:
-        # Order by newest first
         purchases = Purchase.query.filter_by(user_id=get_jwt_identity()).order_by(Purchase.id.desc()).all()
         history_list = [{
             "asset": p.asset_name.replace('[STOCK] ', '').replace('[GOLD] ', '').replace('[SILVER] ', '').replace('[MF] ', ''), 
@@ -259,37 +261,172 @@ def ai_analysis():
         return jsonify({"success": False, "insight": "AI engine temporarily offline."}), 500
 
 # ==========================================
-# 🚀 7. LIVE MARKET DATA (GOLD/SILVER DASHBOARD)
+# 🚀 7. LIVE MARKET DATA SCRAPING (GOLD & SILVER)
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
-    # Returns dynamic data to power the Flutter LineCharts
+    # 1. Scrape Live Gold/Silver Prices from GoodReturns (or use yfinance fallbacks)
+    gold_price = "7450.00"
+    silver_price = "85.40"
+    gold_chart = []
+    silver_chart = []
+
+    try:
+        # Fetching Gold ETF and Silver ETF from Yahoo Finance as a reliable proxy for physical charts
+        gold_ticker = yf.Ticker("GOLDBEES.NS")
+        silver_ticker = yf.Ticker("SILVERBEES.NS")
+        
+        g_hist = gold_ticker.history(period="7d")
+        s_hist = silver_ticker.history(period="7d")
+        
+        # We use the ETF percentage changes to generate realistic charts
+        if not g_hist.empty:
+            gold_chart = g_hist['Close'].tolist()
+            # Try to scrape physical gold price, fallback to ETF * multiplier
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0'}
+                res = requests.get('https://www.goodreturns.in/gold-rates/india.html', headers=headers, timeout=3)
+                soup = BeautifulSoup(res.text, 'html.parser')
+                # Find the 22K 1g price block
+                price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
+                if price_block:
+                     gold_price = price_block.text.replace('₹', '').replace(',', '').strip()
+            except:
+                gold_price = str(round(gold_chart[-1] * 120, 2)) # Fallback multiplier
+                
+        if not s_hist.empty:
+             silver_chart = s_hist['Close'].tolist()
+             # Scrape silver
+             try:
+                 res = requests.get('https://www.goodreturns.in/silver-rates/india.html', headers=headers, timeout=3)
+                 soup = BeautifulSoup(res.text, 'html.parser')
+                 price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
+                 if price_block:
+                     # Usually per KG, convert to per Gram
+                     kg_price = float(price_block.text.replace('₹', '').replace(',', '').strip())
+                     silver_price = str(round(kg_price / 1000, 2))
+             except:
+                 silver_price = str(round(silver_chart[-1], 2))
+
+    except Exception as e:
+        print(f"Scraping error: {e}")
+        # Fallback data is automatically used by Flutter if empty arrays are sent
+
     return jsonify({
         "success": True,
         "metals": {
             "gold": {
-                "price": "₹7,450.00",
-                "chart": [7300, 7350, 7320, 7400, 7450, 7420, 7450]
+                "price": gold_price,
+                "chart": gold_chart
             },
             "silver": {
-                "price": "₹89.50",
-                "chart": [85, 86, 88, 87, 89, 88.5, 89.5]
+                "price": silver_price,
+                "chart": silver_chart
             }
         },
         "etfs": {
-            "NIFTYBEES": "₹265.40",
-            "GOLDBEES": "₹64.20"
+            "NIFTYBEES": "265.40", # You can replace with live yf data later
+            "GOLDBEES": "64.20"
         }
     }), 200
 
 # ==========================================
-# 🚀 8. SERVER INITIALIZATION
+# 🚀 8. LIVE EQUITY & MF DATA (NEW)
+# ==========================================
+@app.route('/api/live_equities', methods=['GET'])
+def live_equities():
+    try:
+        # 1. Fetch live stock data using yfinance
+        stock_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS"]
+        live_stocks = []
+        
+        for t in stock_tickers:
+            ticker = yf.Ticker(t)
+            hist = ticker.history(period="2d") # Get yesterday and today
+            if len(hist) >= 2:
+                current_price = hist['Close'].iloc[-1]
+                prev_price = hist['Close'].iloc[-2]
+                change_pct = ((current_price - prev_price) / prev_price) * 100
+                
+                live_stocks.append({
+                    "symbol": t.replace('.NS', ''),
+                    "price": f"₹{current_price:,.2f}",
+                    "change": f"{'+' if change_pct >= 0 else ''}{change_pct:.2f}%",
+                    "isUp": str(change_pct >= 0).lower()
+                })
+
+        # 2. Fetch live MF data using mftool
+        # Note: AMFI codes are needed here. Example: 120503 is SBI Small Cap
+        mf_codes = ["120503", "120504", "118272"] 
+        live_mfs = []
+        
+        for code in mf_codes:
+            nav_data = mf.get_scheme_quote(code)
+            if nav_data:
+                live_mfs.append({
+                    "name": nav_data['scheme_name'],
+                    "price": f"₹{nav_data['nav']}",
+                    "date": nav_data['date']
+                })
+
+        return jsonify({
+            "success": True,
+            "stocks": live_stocks,
+            "mutual_funds": live_mfs
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# ==========================================
+# 🚀 9. LIVE MARKET NEWS (NEW)
+# ==========================================
+@app.route('/api/market_news', methods=['GET'])
+def market_news():
+    try:
+        # Scrape top headlines from Moneycontrol (or similar)
+        url = "https://www.moneycontrol.com/news/business/markets/"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        news_items = []
+        # Find article blocks (Moneycontrol structure changes, this is a basic example)
+        articles = soup.find_all('li', class_='clearfix', limit=5) 
+        
+        for article in articles:
+            a_tag = article.find('a')
+            if a_tag and a_tag.get('title'):
+                news_items.append({
+                    "title": a_tag.get('title'),
+                    "url": a_tag.get('href'),
+                    "source": "Moneycontrol"
+                })
+                
+        # Fallback if scraping fails
+        if not news_items:
+             news_items = [
+                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly"},
+                {"title": "RBI holds rates steady, focuses on inflation", "url": "#", "source": "Economics Daily"}
+             ]
+
+        return jsonify({"success": True, "news": news_items}), 200
+        
+    except Exception as e:
+         return jsonify({
+             "success": False, 
+             "news": [
+                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly"}
+             ]
+         }), 200
+
+
+# ==========================================
+# 🚀 SERVER INITIALIZATION
 # ==========================================
 if __name__ == '__main__':
     with app.app_context():
-        db.create_all() # Automatically creates all tables if they don't exist
+        db.create_all() 
     
-    # Run the server
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
-
