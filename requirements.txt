@@ -9,3 +9,4 @@ yfinance
 mftool 
 requests 
 beautifulsoup4
+Deprecated
