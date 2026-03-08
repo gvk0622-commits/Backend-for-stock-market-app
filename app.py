@@ -3,23 +3,25 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_cors import CORS
+from apscheduler.schedulers.background import BackgroundScheduler # 🚀 NEW: CRON JOB ENGINE
+from datetime import datetime, timedelta # 🚀 NEW: TIME MANAGEMENT
 import os
 import random
 import yfinance as yf
 from mftool import Mftool
 import requests
 from bs4 import BeautifulSoup
-from datetime import timedelta
 
 app = Flask(__name__)
 CORS(app) # Allows your Flutter app to talk to Python securely
+
 @app.route('/')
 def home():
     return "🚀 Kasu Backend API is LIVE and running smoothly on Docker!"
+
 # ==========================================
 # 🚀 1. SECURE DATABASE CONFIGURATION
 # ==========================================
-# Render provides the DATABASE_URL environment variable automatically
 database_url = os.environ.get('DATABASE_URL', 'sqlite:///local_database.db')
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
@@ -57,6 +59,15 @@ class Purchase(db.Model):
     buy_price = db.Column(db.Float, nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     date = db.Column(db.String(50), nullable=False)
+
+# 🚀 NEW: AUTOMATED SIP TABLE
+class SIP(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    asset_name = db.Column(db.String(100), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    next_due_date = db.Column(db.String(50), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
 
 # ==========================================
 # 🚀 3. AUTHENTICATION (LOGIN & REGISTER)
@@ -236,7 +247,49 @@ def get_history():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 6. AI ANALYSIS ENGINE
+# 🚀 6. AUTOMATED SIP ENGINE & CHARTS
+# ==========================================
+@app.route('/api/start_sip', methods=['POST'])
+@jwt_required()
+def start_sip():
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        wallet = Wallet.query.filter_by(user_id=user_id).first()
+        amount = float(data.get('amount'))
+        asset_name = data.get('asset_name')
+        
+        if not wallet or wallet.balance < amount:
+            return jsonify({"success": False, "message": "Insufficient funds for initial SIP deduction!"}), 400
+            
+        # 1. Deduct & Buy Initial Month Instantly
+        wallet.balance -= amount
+        new_purchase = Purchase(user_id=user_id, asset_name=asset_name, buy_price=amount, quantity=1.0, date=datetime.now().strftime('%Y-%m-%d'))
+        db.session.add(new_purchase)
+        
+        # 2. Register Automated SIP for Future Months
+        next_due = datetime.now() + timedelta(days=30)
+        new_sip = SIP(user_id=user_id, asset_name=asset_name, amount=amount, next_due_date=next_due.strftime('%Y-%m-%d'))
+        db.session.add(new_sip)
+        
+        db.session.commit()
+        return jsonify({"success": True, "message": "SIP Activated! First installment processed."}), 201
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/asset_chart', methods=['GET'])
+def asset_chart():
+    # Generates 30 days of realistic historical chart data for the UI
+    chart_data = []
+    base = 100.0
+    for i in range(30):
+        base += random.uniform(-1.5, 2.0)
+        chart_data.append(round(base, 2))
+    return jsonify({"success": True, "chart": chart_data}), 200
+
+# ==========================================
+# 🚀 7. AI ANALYSIS ENGINE
 # ==========================================
 @app.route('/api/ai_analysis', methods=['GET'])
 @jwt_required()
@@ -263,48 +316,41 @@ def ai_analysis():
         return jsonify({"success": False, "insight": "AI engine temporarily offline."}), 500
 
 # ==========================================
-# 🚀 7. LIVE MARKET DATA SCRAPING (GOLD & SILVER)
+# 🚀 8. LIVE MARKET DATA SCRAPING
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
-    # 1. Scrape Live Gold/Silver Prices from GoodReturns (or use yfinance fallbacks)
     gold_price = "7450.00"
     silver_price = "85.40"
     gold_chart = []
     silver_chart = []
 
     try:
-        # Fetching Gold ETF and Silver ETF from Yahoo Finance as a reliable proxy for physical charts
         gold_ticker = yf.Ticker("GOLDBEES.NS")
         silver_ticker = yf.Ticker("SILVERBEES.NS")
         
         g_hist = gold_ticker.history(period="7d")
         s_hist = silver_ticker.history(period="7d")
         
-        # We use the ETF percentage changes to generate realistic charts
         if not g_hist.empty:
             gold_chart = g_hist['Close'].tolist()
-            # Try to scrape physical gold price, fallback to ETF * multiplier
             try:
                 headers = {'User-Agent': 'Mozilla/5.0'}
                 res = requests.get('https://www.goodreturns.in/gold-rates/india.html', headers=headers, timeout=3)
                 soup = BeautifulSoup(res.text, 'html.parser')
-                # Find the 22K 1g price block
                 price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
                 if price_block:
                      gold_price = price_block.text.replace('₹', '').replace(',', '').strip()
             except:
-                gold_price = str(round(gold_chart[-1] * 120, 2)) # Fallback multiplier
+                gold_price = str(round(gold_chart[-1] * 120, 2)) 
                 
         if not s_hist.empty:
              silver_chart = s_hist['Close'].tolist()
-             # Scrape silver
              try:
                  res = requests.get('https://www.goodreturns.in/silver-rates/india.html', headers=headers, timeout=3)
                  soup = BeautifulSoup(res.text, 'html.parser')
                  price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
                  if price_block:
-                     # Usually per KG, convert to per Gram
                      kg_price = float(price_block.text.replace('₹', '').replace(',', '').strip())
                      silver_price = str(round(kg_price / 1000, 2))
              except:
@@ -312,39 +358,31 @@ def live_market():
 
     except Exception as e:
         print(f"Scraping error: {e}")
-        # Fallback data is automatically used by Flutter if empty arrays are sent
 
     return jsonify({
         "success": True,
         "metals": {
-            "gold": {
-                "price": gold_price,
-                "chart": gold_chart
-            },
-            "silver": {
-                "price": silver_price,
-                "chart": silver_chart
-            }
+            "gold": {"price": gold_price, "chart": gold_chart},
+            "silver": {"price": silver_price, "chart": silver_chart}
         },
         "etfs": {
-            "NIFTYBEES": "265.40", # You can replace with live yf data later
+            "NIFTYBEES": "265.40", 
             "GOLDBEES": "64.20"
         }
     }), 200
 
 # ==========================================
-# 🚀 8. LIVE EQUITY & MF DATA (NEW)
+# 🚀 9. LIVE EQUITY & MF DATA
 # ==========================================
 @app.route('/api/live_equities', methods=['GET'])
 def live_equities():
     try:
-        # 1. Fetch live stock data using yfinance
         stock_tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS"]
         live_stocks = []
         
         for t in stock_tickers:
             ticker = yf.Ticker(t)
-            hist = ticker.history(period="2d") # Get yesterday and today
+            hist = ticker.history(period="2d") 
             if len(hist) >= 2:
                 current_price = hist['Close'].iloc[-1]
                 prev_price = hist['Close'].iloc[-2]
@@ -357,8 +395,6 @@ def live_equities():
                     "isUp": str(change_pct >= 0).lower()
                 })
 
-        # 2. Fetch live MF data using mftool
-        # Note: AMFI codes are needed here. Example: 120503 is SBI Small Cap
         mf_codes = ["120503", "120504", "118272"] 
         live_mfs = []
         
@@ -381,7 +417,7 @@ def live_equities():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 9. LIVE MARKET NEWS (WITH IMAGES)
+# 🚀 10. LIVE MARKET NEWS
 # ==========================================
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
@@ -392,29 +428,26 @@ def market_news():
         soup = BeautifulSoup(response.text, 'html.parser')
         
         news_items = []
-        # Find article blocks
         articles = soup.find_all('li', class_='clearfix', limit=5) 
         
         for article in articles:
             a_tag = article.find('a')
-            img_tag = article.find('img') # 🚀 Extract the image tag
+            img_tag = article.find('img') 
             
             if a_tag and a_tag.get('title'):
-                # Extract the image URL, provide a fallback if missing
                 image_url = ""
                 if img_tag and img_tag.get('data-src'):
                     image_url = img_tag.get('data-src')
                 elif img_tag and img_tag.get('src'):
                     image_url = img_tag.get('src')
                 else:
-                    # Provide a generic stock market image fallback
                     image_url = "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"
 
                 news_items.append({
                     "title": a_tag.get('title'),
                     "url": a_tag.get('href'),
                     "source": "Moneycontrol",
-                    "image": image_url # 🚀 Add the image to the response
+                    "image": image_url 
                 })
                 
         if not news_items:
@@ -432,6 +465,34 @@ def market_news():
              ]
          }), 200
 
+# ==========================================
+# 🚀 11. CRON JOB: BACKGROUND SIP PROCESSOR
+# ==========================================
+def process_automated_sips():
+    """This function runs silently in the background to deduct SIPs"""
+    with app.app_context():
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        # Find all active SIPs due today or earlier
+        due_sips = SIP.query.filter(SIP.is_active == True, SIP.next_due_date <= today_str).all()
+        
+        for sip in due_sips:
+            wallet = Wallet.query.filter_by(user_id=sip.user_id).first()
+            if wallet and wallet.balance >= sip.amount:
+                # Deduct funds and log the purchase
+                wallet.balance -= sip.amount
+                new_purchase = Purchase(user_id=sip.user_id, asset_name=sip.asset_name, buy_price=sip.amount, quantity=1.0, date=today_str)
+                db.session.add(new_purchase)
+                
+                # Set next deduction date (+30 days)
+                next_due = datetime.now() + timedelta(days=30)
+                sip.next_due_date = next_due.strftime('%Y-%m-%d')
+        
+        db.session.commit()
+
+# Start the background cron job to check SIPs every 24 hours
+scheduler = BackgroundScheduler()
+scheduler.add_job(func=process_automated_sips, trigger="interval", hours=24)
+scheduler.start()
 
 # ==========================================
 # 🚀 SERVER INITIALIZATION
@@ -441,6 +502,6 @@ if __name__ == '__main__':
         db.create_all() 
     
     port = int(os.environ.get('PORT', 5000))
+    # Important Note: If you run this locally in debug mode, the scheduler might start twice!
+    # Render handles this gracefully in production.
     app.run(host='0.0.0.0', port=port, debug=True)
-
-
