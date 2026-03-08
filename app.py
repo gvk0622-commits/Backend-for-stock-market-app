@@ -13,7 +13,9 @@ from datetime import timedelta
 
 app = Flask(__name__)
 CORS(app) # Allows your Flutter app to talk to Python securely
-
+@app.route('/')
+def home():
+    return "🚀 Kasu Backend API is LIVE and running smoothly on Docker!"
 # ==========================================
 # 🚀 1. SECURE DATABASE CONFIGURATION
 # ==========================================
@@ -440,4 +442,5 @@ if __name__ == '__main__':
     
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
 
