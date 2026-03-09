@@ -10,7 +10,6 @@ import random
 import yfinance as yf
 from mftool import Mftool
 import requests
-from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
 
 app = Flask(__name__)
@@ -327,63 +326,7 @@ def live_market():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 8. LIVE MARKET DATA SCRAPING
-# ==========================================
-@app.route('/api/live_market', methods=['GET'])
-def live_market():
-    gold_price = "7450.00"
-    silver_price = "85.40"
-    gold_chart = []
-    silver_chart = []
-
-    try:
-        gold_ticker = yf.Ticker("GOLDBEES.NS")
-        silver_ticker = yf.Ticker("SILVERBEES.NS")
-        
-        g_hist = gold_ticker.history(period="7d")
-        s_hist = silver_ticker.history(period="7d")
-        
-        if not g_hist.empty:
-            gold_chart = g_hist['Close'].tolist()
-            try:
-                headers = {'User-Agent': 'Mozilla/5.0'}
-                res = requests.get('https://www.goodreturns.in/gold-rates/india.html', headers=headers, timeout=3)
-                soup = BeautifulSoup(res.text, 'html.parser')
-                price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
-                if price_block:
-                     gold_price = price_block.text.replace('₹', '').replace(',', '').strip()
-            except:
-                gold_price = str(round(gold_chart[-1] * 120, 2)) 
-                
-        if not s_hist.empty:
-             silver_chart = s_hist['Close'].tolist()
-             try:
-                 res = requests.get('https://www.goodreturns.in/silver-rates/india.html', headers=headers, timeout=3)
-                 soup = BeautifulSoup(res.text, 'html.parser')
-                 price_block = soup.find('div', class_='gold_silver_table').find('strong', id='el')
-                 if price_block:
-                     kg_price = float(price_block.text.replace('₹', '').replace(',', '').strip())
-                     silver_price = str(round(kg_price / 1000, 2))
-             except:
-                 silver_price = str(round(silver_chart[-1], 2))
-
-    except Exception as e:
-        print(f"Scraping error: {e}")
-
-    return jsonify({
-        "success": True,
-        "metals": {
-            "gold": {"price": gold_price, "chart": gold_chart},
-            "silver": {"price": silver_price, "chart": silver_chart}
-        },
-        "etfs": {
-            "NIFTYBEES": "265.40", 
-            "GOLDBEES": "64.20"
-        }
-    }), 200
-
-# ==========================================
-# 🚀 9. LIVE MARKET NEWS (UNBREAKABLE RSS FEED)
+# 🚀 8. LIVE MARKET NEWS (UNBREAKABLE RSS FEED)
 # ==========================================
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
@@ -419,57 +362,9 @@ def market_news():
         
     except Exception as e:
          return jsonify({"success": False, "news": []}), 500
-# ==========================================
-# 🚀 10. LIVE MARKET NEWS
-# ==========================================
-@app.route('/api/market_news', methods=['GET'])
-def market_news():
-    try:
-        url = "https://www.moneycontrol.com/news/business/markets/"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        news_items = []
-        articles = soup.find_all('li', class_='clearfix', limit=5) 
-        
-        for article in articles:
-            a_tag = article.find('a')
-            img_tag = article.find('img') 
-            
-            if a_tag and a_tag.get('title'):
-                image_url = ""
-                if img_tag and img_tag.get('data-src'):
-                    image_url = img_tag.get('data-src')
-                elif img_tag and img_tag.get('src'):
-                    image_url = img_tag.get('src')
-                else:
-                    image_url = "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"
-
-                news_items.append({
-                    "title": a_tag.get('title'),
-                    "url": a_tag.get('href'),
-                    "source": "Moneycontrol",
-                    "image": image_url 
-                })
-                
-        if not news_items:
-             news_items = [
-                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly", "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"},
-             ]
-
-        return jsonify({"success": True, "news": news_items}), 200
-        
-    except Exception as e:
-         return jsonify({
-             "success": False, 
-             "news": [
-                {"title": "Markets hit new highs amid strong Q3 earnings", "url": "#", "source": "Finance Weekly", "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=200&auto=format&fit=crop"}
-             ]
-         }), 200
 
 # ==========================================
-# 🚀 11. CRON JOB: BACKGROUND SIP PROCESSOR
+# 🚀 9. CRON JOB: BACKGROUND SIP PROCESSOR
 # ==========================================
 def process_automated_sips():
     """This function runs silently in the background to deduct SIPs"""
@@ -508,4 +403,3 @@ if __name__ == '__main__':
     # Important Note: If you run this locally in debug mode, the scheduler might start twice!
     # Render handles this gracefully in production.
     app.run(host='0.0.0.0', port=port, debug=True)
-
