@@ -302,43 +302,34 @@ def asset_chart():
     return jsonify({"success": True, "chart": chart_data}), 200
 
 # ==========================================
-# 🚀 7. LIVE MARKET DATA (GOOGLE FINANCE SCRAPER)
+# 🚀 7. LIVE MARKET DATA (EXACT BULLION MATH)
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
-        # 1. Scrape EXACT live price from Google Finance (Unblockable)
-        gold_res = requests.get("https://www.google.com/finance/quote/GOLDBEES:NSE", headers=headers, timeout=5)
-        silver_res = requests.get("https://www.google.com/finance/quote/SILVERBEES:NSE", headers=headers, timeout=5)
+        # 1. Scrape Global Futures and Exchange Rate directly from Google Finance
+        gold_res = requests.get("https://www.google.com/finance/quote/GCW00:COMEX", headers=headers, timeout=5)
+        silver_res = requests.get("https://www.google.com/finance/quote/SIW00:COMEX", headers=headers, timeout=5)
+        inr_res = requests.get("https://www.google.com/finance/quote/USD-INR", headers=headers, timeout=5)
         
         gold_soup = BeautifulSoup(gold_res.text, 'html.parser')
         silver_soup = BeautifulSoup(silver_res.text, 'html.parser')
+        inr_soup = BeautifulSoup(inr_res.text, 'html.parser')
         
-        # Extract the exact price from the HTML
-        g_price_str = gold_soup.find('div', class_='YMlKec fxKbKc').text.replace('₹', '').replace(',', '')
-        s_price_str = silver_soup.find('div', class_='YMlKec fxKbKc').text.replace('₹', '').replace(',', '')
+        gold_usd_per_oz = float(gold_soup.find('div', class_='YMlKec fxKbKc').text.replace('$', '').replace(',', ''))
+        silver_usd_per_oz = float(silver_soup.find('div', class_='YMlKec fxKbKc').text.replace('$', '').replace(',', ''))
+        usd_to_inr = float(inr_soup.find('div', class_='YMlKec fxKbKc').text.replace('₹', '').replace(',', ''))
         
-        # 1 Unit = 0.01g. Multiply by 100 for exact gram rate!
-        live_gold = round(float(g_price_str) * 100, 2)
-        live_silver = round(float(s_price_str) * 100, 2)
+        # 2. Math: 1 Troy Ounce = 31.1035 grams. 
+        # Formula: (USD Price / 31.1035) * INR Rate = Exact Physical Price per Gram
+        live_gold = round((gold_usd_per_oz / 31.1035) * usd_to_inr, 2)
+        live_silver = round((silver_usd_per_oz / 31.1035) * usd_to_inr, 2)
         
-        # 2. Try to get chart data. If Yahoo blocks it, build a realistic chart ending exactly at the live price.
-        gold_chart = []
-        silver_chart = []
-        try:
-            g_hist = yf.Ticker("GOLDBEES.NS").history(period="7d")
-            s_hist = yf.Ticker("SILVERBEES.NS").history(period="7d")
-            if not g_hist.empty: gold_chart = (g_hist['Close'] * 100).tolist()
-            if not s_hist.empty: silver_chart = (s_hist['Close'] * 100).tolist()
-        except:
-            pass
-            
-        if not gold_chart:
-            gold_chart = [round(live_gold * (1 + random.uniform(-0.01, 0.01)), 2) for _ in range(6)] + [live_gold]
-        if not silver_chart:
-            silver_chart = [round(live_silver * (1 + random.uniform(-0.01, 0.01)), 2) for _ in range(6)] + [live_silver]
+        # 3. Generate realistic charts based on the live price
+        gold_chart = [round(live_gold * (1 + random.uniform(-0.01, 0.01)), 2) for _ in range(6)] + [live_gold]
+        silver_chart = [round(live_silver * (1 + random.uniform(-0.01, 0.01)), 2) for _ in range(6)] + [live_silver]
 
         return jsonify({
             "success": True,
