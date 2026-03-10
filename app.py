@@ -118,6 +118,20 @@ def login():
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
 
+# 🚀 NEW: GET USER PROFILE DATA
+@app.route('/api/user_profile', methods=['GET'])
+@jwt_required()
+def user_profile():
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(user_id)
+        if user:
+            return jsonify({"success": True, "user_name": user.full_name}), 200
+        return jsonify({"success": False, "message": "User not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
 # ==========================================
 # 🚀 4. WALLET & FINANCIAL TRANSACTIONS
 # ==========================================
