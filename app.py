@@ -124,8 +124,11 @@ def handle_wallet():
         user_id = get_jwt_identity()
         wallet = Wallet.query.filter_by(user_id=user_id).first()
         
+        # 🚀 THE FIX: If the wallet doesn't exist, auto-create it silently!
         if not wallet:
-            return jsonify({"success": False, "message": "Wallet not found"}), 404
+            wallet = Wallet(user_id=user_id, balance=100000.00, currency="INR")
+            db.session.add(wallet)
+            db.session.commit()
 
         if request.method == 'GET':
             return jsonify({"success": True, "balance": wallet.balance, "currency": wallet.currency}), 200
@@ -142,6 +145,7 @@ def handle_wallet():
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
+
 
 @app.route('/api/my_portfolio', methods=['GET'])
 @jwt_required()
