@@ -2,7 +2,6 @@ import os
 import random
 import requests
 import hashlib
-import yfinance as yf
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
@@ -25,8 +24,10 @@ if database_url.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# Added extra length to the secret key to resolve the JWT Warning
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-wealth-key-2026-xyz123')
+
+# 🚀 THE FIX: Make logins last 30 days instead of 15 minutes!
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=30)
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -71,7 +72,7 @@ def health_check():
     return jsonify({
         "success": True, 
         "message": "Kasu Wealth API is running successfully!",
-        "version": "1.1"
+        "version": "1.2"
     }), 200
 
 @app.route('/api/signup', methods=['POST'])
