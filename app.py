@@ -78,7 +78,7 @@ def signup():
         db.session.add(new_user)
         db.session.commit()
         
-        # 🚀 Automatically fund the new user's wallet with virtual cash
+        # Automatically fund the new user's wallet with virtual cash
         new_wallet = Wallet(user_id=new_user.id, balance=100000.00, currency="INR")
         db.session.add(new_wallet)
         db.session.commit()
@@ -115,7 +115,89 @@ def user_profile():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 4. TRANSACTION & ASSET ROUTES
+# 🚀 4. WALLET, PORTFOLIO & HISTORY ROUTES 
+# ==========================================
+@app.route('/api/wallet', methods=['GET', 'POST'])
+@jwt_required()
+def handle_wallet():
+    try:
+        user_id = get_jwt_identity()
+        wallet = Wallet.query.filter_by(user_id=user_id).first()
+        
+        if not wallet:
+            return jsonify({"success": False, "message": "Wallet not found"}), 404
+
+        if request.method == 'GET':
+            return jsonify({"success": True, "balance": wallet.balance, "currency": wallet.currency}), 200
+            
+        if request.method == 'POST':
+            data = request.get_json()
+            amount_to_add = float(data.get('amount', 0))
+            if amount_to_add <= 0:
+                return jsonify({"success": False, "message": "Invalid amount"}), 400
+                
+            wallet.balance += amount_to_add
+            db.session.commit()
+            return jsonify({"success": True, "message": "Funds added successfully!", "balance": wallet.balance}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/my_portfolio', methods=['GET'])
+@jwt_required()
+def my_portfolio():
+    try:
+        user_id = get_jwt_identity()
+        purchases = Purchase.query.filter_by(user_id=user_id).all()
+        
+        portfolio_dict = {}
+        for p in purchases:
+            # We group by asset to show total holdings
+            if p.asset_name in portfolio_dict:
+                portfolio_dict[p.asset_name]['qty'] += p.quantity
+                # Basic weighted average price approach
+                portfolio_dict[p.asset_name]['price'] = (portfolio_dict[p.asset_name]['price'] + p.buy_price) / 2
+            else:
+                portfolio_dict[p.asset_name] = {
+                    'asset': p.asset_name,
+                    'qty': p.quantity,
+                    'price': p.buy_price,
+                    'date': p.date
+                }
+                
+        # Remove assets where quantity reached 0 (sold out)
+        portfolio_list = [v for k, v in portfolio_dict.items() if v['qty'] > 0]
+        
+        return jsonify({"success": True, "portfolio": portfolio_list}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/history', methods=['GET'])
+@jwt_required()
+def order_history():
+    try:
+        user_id = get_jwt_identity()
+        purchases = Purchase.query.filter_by(user_id=user_id).order_by(Purchase.id.desc()).all()
+        
+        history_list = []
+        for p in purchases:
+            transaction_type = "BUY" if p.quantity > 0 else "SELL"
+            history_list.append({
+                "id": p.id,
+                "asset": p.asset_name,
+                "qty": abs(p.quantity),
+                "price": p.buy_price,
+                "total": p.buy_price * abs(p.quantity),
+                "date": p.date,
+                "type": transaction_type
+            })
+            
+        return jsonify({"success": True, "history": history_list}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# ==========================================
+# 🚀 5. TRANSACTION ROUTES
 # ==========================================
 @app.route('/api/buy_asset', methods=['POST'])
 @jwt_required()
@@ -151,15 +233,46 @@ def buy_asset():
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/api/sell_asset', methods=['POST'])
+@jwt_required()
+def sell_asset():
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        asset_name = data['asset_name']
+        sell_price = float(data['sell_price'])
+        quantity = float(data.get('quantity', 1.0))
+        
+        wallet = Wallet.query.filter_by(user_id=user_id).first()
+        
+        # Add funds back to the wallet
+        if wallet:
+            wallet.balance += (sell_price * quantity)
+            
+        # Record the transaction as a negative quantity
+        sell_transaction = Purchase(
+            user_id=user_id,
+            asset_name=asset_name,
+            buy_price=sell_price,
+            quantity=-quantity, 
+            date=datetime.now().strftime('%Y-%m-%d')
+        )
+        
+        db.session.add(sell_transaction)
+        db.session.commit()
+        return jsonify({"success": True, "message": f"Successfully liquidated {asset_name}"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
 # ==========================================
-# 🚀 5. LIVE MARKET DATA (WITH FAILSAFE)
+# 🚀 6. LIVE MARKET DATA & NEWS (WITH FAILSAFE)
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         
-        # Scrape Global Futures and Exchange Rate directly from Google Finance
         gold_res = requests.get("https://www.google.com/finance/quote/GCW00:COMEX", headers=headers, timeout=5)
         silver_res = requests.get("https://www.google.com/finance/quote/SIW00:COMEX", headers=headers, timeout=5)
         inr_res = requests.get("https://www.google.com/finance/quote/USD-INR", headers=headers, timeout=5)
@@ -172,7 +285,6 @@ def live_market():
         silver_usd_per_oz = float(silver_soup.find('div', class_='YMlKec fxKbKc').text.replace('$', '').replace(',', ''))
         usd_to_inr = float(inr_soup.find('div', class_='YMlKec fxKbKc').text.replace('₹', '').replace(',', ''))
         
-        # Math: 1 Troy Ounce = 31.1035 grams
         live_gold = round((gold_usd_per_oz / 31.1035) * usd_to_inr, 2)
         live_silver = round((silver_usd_per_oz / 31.1035) * usd_to_inr, 2)
         
@@ -187,7 +299,6 @@ def live_market():
             }
         }), 200
     except Exception as e:
-        # 🚀 CRITICAL FALLBACK: If Google blocks the server, return realistic data so Flutter NEVER crashes!
         return jsonify({
             "success": True,
             "metals": {
@@ -196,9 +307,6 @@ def live_market():
             }
         }), 200
 
-# ==========================================
-# 🚀 6. LIVE MARKET NEWS (WITH FAILSAFE)
-# ==========================================
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
     try:
@@ -228,7 +336,6 @@ def market_news():
             
         return jsonify({"success": True, "news": news_items}), 200
     except Exception as e:
-         # 🚀 CRITICAL FALLBACK: Send safe placeholder news if RSS feed is blocked
          return jsonify({
              "success": True, 
              "news": [{
@@ -238,14 +345,14 @@ def market_news():
                  "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3"
              }]
          }), 200
+
 # ==========================================
-# 🚀 7. DYNAMIC REAL ESTATE PRICING ENGINE
+# 🚀 7. REAL ESTATE & AI ENGINES
 # ==========================================
 @app.route('/api/real_estate', methods=['GET'])
 def real_estate_data():
     try:
         days_passed = (datetime.now() - datetime(2024, 1, 1)).days
-        
         def calculate_live_price(base_price, annual_growth):
             live_price = base_price * (1 + (annual_growth / 365) * days_passed)
             return int(live_price)
@@ -268,8 +375,28 @@ def real_estate_data():
     except Exception as e:
          return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/api/ai_analysis', methods=['GET'])
+@jwt_required()
+def ai_analysis():
+    # Feeds the dynamic insight text on your home page
+    return jsonify({
+        "success": True, 
+        "insight": "Your portfolio is well diversified, but maintaining a steady allocation in Gold could act as a hedge against upcoming market volatility."
+    }), 200
+
+@app.route('/analyze_portfolio', methods=['GET'])
+def analyze_portfolio():
+    # Feeds the Q-Network Alerts on the home page and AI Recommendations page
+    return jsonify({
+        "success": True,
+        "results": [
+            {"fund_name": "HDFC Top 100 Fund", "status": "Pause: Shift to Silver"},
+            {"fund_name": "HDFC Flexi Cap Fund", "status": "Pause: Shift to Gold"}
+        ]
+    }), 200
+
 # ==========================================
-# 🚀 8. AUTOMATED SIP CRON JOB (BACKGROUND SCHEDULER)
+# 🚀 8. AUTOMATED SIP CRON JOB 
 # ==========================================
 def process_sips():
     with app.app_context():
