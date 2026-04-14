@@ -1,6 +1,7 @@
 import os
 import random
 import requests
+import hashlib
 import yfinance as yf
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
@@ -24,7 +25,8 @@ if database_url.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-wealth-key-2026')
+# Added extra length to the secret key to resolve the JWT Warning
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'super-secret-wealth-key-2026-xyz123')
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
@@ -62,8 +64,16 @@ class SIP(db.Model):
     is_active = db.Column(db.Boolean, default=True)
 
 # ==========================================
-# 🚀 3. AUTHENTICATION & USER ROUTES
+# 🚀 3. HEALTH CHECK & AUTH ROUTES
 # ==========================================
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({
+        "success": True, 
+        "message": "Kasu Wealth API is running successfully!",
+        "version": "1.1"
+    }), 200
+
 @app.route('/api/signup', methods=['POST'])
 def signup():
     try:
@@ -115,7 +125,7 @@ def user_profile():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 4. WALLET, PORTFOLIO & HISTORY ROUTES 
+# 🚀 4. WALLET, PORTFOLIO & HISTORY ROUTES
 # ==========================================
 @app.route('/api/wallet', methods=['GET', 'POST'])
 @jwt_required()
@@ -124,7 +134,7 @@ def handle_wallet():
         user_id = get_jwt_identity()
         wallet = Wallet.query.filter_by(user_id=user_id).first()
         
-        # 🚀 THE FIX: If the wallet doesn't exist, auto-create it silently!
+        # Lazy Initialization: Auto-create wallet if missing
         if not wallet:
             wallet = Wallet(user_id=user_id, balance=100000.00, currency="INR")
             db.session.add(wallet)
@@ -146,7 +156,6 @@ def handle_wallet():
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
 
-
 @app.route('/api/my_portfolio', methods=['GET'])
 @jwt_required()
 def my_portfolio():
@@ -156,10 +165,8 @@ def my_portfolio():
         
         portfolio_dict = {}
         for p in purchases:
-            # We group by asset to show total holdings
             if p.asset_name in portfolio_dict:
                 portfolio_dict[p.asset_name]['qty'] += p.quantity
-                # Basic weighted average price approach
                 portfolio_dict[p.asset_name]['price'] = (portfolio_dict[p.asset_name]['price'] + p.buy_price) / 2
             else:
                 portfolio_dict[p.asset_name] = {
@@ -169,9 +176,7 @@ def my_portfolio():
                     'date': p.date
                 }
                 
-        # Remove assets where quantity reached 0 (sold out)
         portfolio_list = [v for k, v in portfolio_dict.items() if v['qty'] > 0]
-        
         return jsonify({"success": True, "portfolio": portfolio_list}), 200
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
@@ -201,7 +206,7 @@ def order_history():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
-# 🚀 5. TRANSACTION ROUTES
+# 🚀 5. TRANSACTION & SIP ROUTES
 # ==========================================
 @app.route('/api/buy_asset', methods=['POST'])
 @jwt_required()
@@ -210,11 +215,14 @@ def buy_asset():
         user_id = get_jwt_identity()
         data = request.get_json()
         
-        total_cost = float(data['buy_price']) * float(data['quantity'])
+        total_cost = float(data['buy_price']) * float(data.get('quantity', 1.0))
         wallet = Wallet.query.filter_by(user_id=user_id).first()
         
+        # Lazy Initialization: Auto-create wallet if bypassed home screen
         if not wallet:
-            return jsonify({"success": False, "message": "Wallet not found. Please contact support."}), 404
+            wallet = Wallet(user_id=user_id, balance=100000.00, currency="INR")
+            db.session.add(wallet)
+            db.session.commit()
             
         if wallet.balance < total_cost:
             return jsonify({"success": False, "message": f"Insufficient balance. You need ₹{total_cost:,.2f}."}), 400
@@ -225,7 +233,7 @@ def buy_asset():
             user_id=user_id,
             asset_name=data['asset_name'],
             buy_price=data['buy_price'],
-            quantity=data['quantity'],
+            quantity=data.get('quantity', 1.0),
             date=data['date']
         )
         
@@ -235,7 +243,7 @@ def buy_asset():
         return jsonify({"success": True, "message": "Investment successful!"}), 201
     except Exception as e:
         db.session.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
+        return jsonify({"success": False, "message": f"Transaction Error: {str(e)}"}), 500
 
 @app.route('/api/sell_asset', methods=['POST'])
 @jwt_required()
@@ -248,12 +256,9 @@ def sell_asset():
         quantity = float(data.get('quantity', 1.0))
         
         wallet = Wallet.query.filter_by(user_id=user_id).first()
-        
-        # Add funds back to the wallet
         if wallet:
             wallet.balance += (sell_price * quantity)
             
-        # Record the transaction as a negative quantity
         sell_transaction = Purchase(
             user_id=user_id,
             asset_name=asset_name,
@@ -269,8 +274,52 @@ def sell_asset():
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
 
+@app.route('/api/start_sip', methods=['POST'])
+@jwt_required()
+def start_sip():
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        wallet = Wallet.query.filter_by(user_id=user_id).first()
+        if not wallet:
+            return jsonify({"success": False, "message": "Wallet not found"}), 404
+            
+        sip_amount = float(data['amount'])
+        if wallet.balance < sip_amount:
+            return jsonify({"success": False, "message": f"Insufficient balance for first SIP. You need ₹{sip_amount:,.2f}"}), 400
+            
+        # Deduct the first month's payment immediately
+        wallet.balance -= sip_amount
+        
+        # Record the initial Purchase
+        new_purchase = Purchase(
+            user_id=user_id,
+            asset_name=data['asset_name'],
+            buy_price=sip_amount,
+            quantity=data.get('quantity', 1.0),
+            date=data['date']
+        )
+        db.session.add(new_purchase)
+        
+        # Register the recurring SIP logic
+        next_date = datetime.now() + timedelta(days=30)
+        new_sip = SIP(
+            user_id=user_id,
+            asset_name=data['asset_name'],
+            amount=sip_amount,
+            next_due_date=next_date.strftime('%Y-%m-%d')
+        )
+        db.session.add(new_sip)
+        
+        db.session.commit()
+        return jsonify({"success": True, "message": "SIP Started Successfully!"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
 # ==========================================
-# 🚀 6. LIVE MARKET DATA & NEWS (WITH FAILSAFE)
+# 🚀 6. LIVE MARKET DATA & CHARTS
 # ==========================================
 @app.route('/api/live_market', methods=['GET'])
 def live_market():
@@ -310,6 +359,29 @@ def live_market():
                 "silver": {"price": "91.20", "chart": [89.0, 89.5, 90.0, 90.2, 90.8, 91.0, 91.20]}
             }
         }), 200
+
+@app.route('/api/asset_chart', methods=['GET'])
+def asset_chart():
+    try:
+        asset_name = request.args.get('asset', 'Unknown')
+        
+        # Create a consistent mathematical seed based on the asset's name
+        seed = int(hashlib.md5(asset_name.encode()).hexdigest(), 16)
+        random.seed(seed)
+        
+        base_nav = random.uniform(50, 300)
+        chart_data = []
+        current_nav = base_nav
+        
+        # Generate 30 days of realistic market movement
+        for i in range(30):
+            movement = random.uniform(-0.015, 0.018)
+            current_nav = current_nav * (1 + movement)
+            chart_data.append(round(current_nav, 2))
+            
+        return jsonify({"success": True, "chart": chart_data}), 200
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
@@ -382,7 +454,6 @@ def real_estate_data():
 @app.route('/api/ai_analysis', methods=['GET'])
 @jwt_required()
 def ai_analysis():
-    # Feeds the dynamic insight text on your home page
     return jsonify({
         "success": True, 
         "insight": "Your portfolio is well diversified, but maintaining a steady allocation in Gold could act as a hedge against upcoming market volatility."
@@ -390,7 +461,6 @@ def ai_analysis():
 
 @app.route('/analyze_portfolio', methods=['GET'])
 def analyze_portfolio():
-    # Feeds the Q-Network Alerts on the home page and AI Recommendations page
     return jsonify({
         "success": True,
         "results": [
@@ -400,7 +470,7 @@ def analyze_portfolio():
     }), 200
 
 # ==========================================
-# 🚀 8. AUTOMATED SIP CRON JOB 
+# 🚀 8. AUTOMATED SIP CRON JOB
 # ==========================================
 def process_sips():
     with app.app_context():
@@ -410,10 +480,8 @@ def process_sips():
         for sip in due_sips:
             wallet = Wallet.query.filter_by(user_id=sip.user_id).first()
             if wallet and wallet.balance >= sip.amount:
-                # Deduct funds
                 wallet.balance -= sip.amount
                 
-                # Record Purchase
                 new_purchase = Purchase(
                     user_id=sip.user_id,
                     asset_name=f"[SIP] {sip.asset_name}",
@@ -423,7 +491,6 @@ def process_sips():
                 )
                 db.session.add(new_purchase)
                 
-                # Update next due date (+30 days)
                 next_date = datetime.now() + timedelta(days=30)
                 sip.next_due_date = next_date.strftime('%Y-%m-%d')
                 
