@@ -387,41 +387,47 @@ def asset_chart():
 @app.route('/api/market_news', methods=['GET'])
 def market_news():
     try:
-        url = "https://news.google.com/rss/search?q=indian+stock+market+finance&hl=en-IN&gl=IN&ceid=IN:en"
-        response = requests.get(url, timeout=5)
+        # 🚀 THE FIX: Use Economic Times Markets RSS. It has real stock news AND real images!
+        url = "https://economictimes.indiatimes.com/markets/rssfeeds/2146842.cms"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(url, headers=headers, timeout=5)
         root = ET.fromstring(response.content)
         
         news_items = []
-        images = [
-            "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=400&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?q=80&w=400&auto=format&fit=crop",
-            "https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?q=80&w=400&auto=format&fit=crop"
-        ]
         
-        for i, item in enumerate(root.findall('.//item')[:10]):  
-            title = item.find('title').text
-            link = item.find('link').text
-            source_tag = item.find('source')
-            source = source_tag.text if source_tag is not None else "Finance News"
+        # Loop through the live feed
+        for item in root.findall('.//item'):
+            title_tag = item.find('title')
+            link_tag = item.find('link')
             
+            # Skip if the data is malformed
+            if title_tag is None or link_tag is None:
+                continue
+                
+            # Extract the actual news image (ET stores it in the <enclosure> tag)
+            image_url = "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?q=80&w=400&auto=format&fit=crop"
+            enclosure = item.find('enclosure')
+            if enclosure is not None and enclosure.get('url'):
+                image_url = enclosure.get('url')
+            else:
+                img_tag = item.find('image')
+                if img_tag is not None and img_tag.text:
+                    image_url = img_tag.text
+                    
             news_items.append({
-                "title": title,
-                "url": link,
-                "source": source,
-                "image": images[i % len(images)]
+                "title": title_tag.text.strip(),
+                "url": link_tag.text.strip(),
+                "source": "Economic Times",
+                "image": image_url
             })
             
+            # Stop exactly when we reach 10 items!
+            if len(news_items) == 10:
+                break
+                
         return jsonify({"success": True, "news": news_items}), 200
     except Exception as e:
-         return jsonify({
-             "success": True, 
-             "news": [{
-                 "title": "Markets Stabilize Amid New Economic Data", 
-                 "url": "https://finance.yahoo.com", 
-                 "source": "Finance News", 
-                 "image": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3"
-             }]
-         }), 200
+        return jsonify({"success": False, "message": str(e)}), 500
 
 # ==========================================
 # 🚀 7. REAL ESTATE & AI ENGINES
