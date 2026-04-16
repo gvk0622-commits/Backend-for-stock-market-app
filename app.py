@@ -230,12 +230,15 @@ def buy_asset():
             
         wallet.balance -= total_cost
         
+        # 🚀 THE FIX: Use today's date automatically if Flutter forgets to send one
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
         new_purchase = Purchase(
             user_id=user_id,
             asset_name=data['asset_name'],
             buy_price=data['buy_price'],
             quantity=data.get('quantity', 1.0),
-            date=data['date']
+            date=data.get('date') or current_date  # <-- Bulletproof fallback!
         )
         
         db.session.add(new_purchase)
@@ -293,13 +296,16 @@ def start_sip():
         # Deduct the first month's payment immediately
         wallet.balance -= sip_amount
         
+        # 🚀 THE FIX: Apply the same bulletproof date logic here
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        
         # Record the initial Purchase
         new_purchase = Purchase(
             user_id=user_id,
             asset_name=data['asset_name'],
             buy_price=sip_amount,
             quantity=data.get('quantity', 1.0),
-            date=data['date']
+            date=data.get('date') or current_date  # <-- Bulletproof fallback!
         )
         db.session.add(new_purchase)
         
